@@ -21,7 +21,7 @@ Install::
 Use in python::
 
   >>> import python_build
-  >>> python_build.build.python_build("2.7.3", "/home/user/projectdirectory/py273")
+  >>> python_build.python_build("2.7.3", "/home/user/projectdirectory/py273")
 
 Use outside of python::
 

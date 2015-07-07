@@ -1,1 +1,1 @@
-from python_build import build
+from python_build.build import python_build

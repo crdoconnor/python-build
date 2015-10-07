@@ -1,20 +1,41 @@
-from os import path, chdir, environ
+from subprocess import CalledProcessError, check_output, check_call
 from sys import stdout, stderr, exit, argv, platform
-from subprocess import call, check_output
+from os import path, chdir, environ
 import copy
+
+
+class PythonBuildException(Exception):
+    pass
 
 
 PYTHONBUILD_DIR = path.dirname(path.realpath(__file__))
 
+
 def python_build(*args):
+    # Get a copy of system environment vars, so it can be modified accordingly and passed on.
     environment_vars = copy.copy(environ)
+
+    # Mac OS special config from https://github.com/yyuu/pyenv/wiki/Common-build-problems
     if platform == "darwin":
         osx_version = check_output(["sw_vers", "-productVersion"]).decode('utf8').replace('\n', '')
         if osx_version in ["10.9", "10.10"]:
             sdk_path = check_output(["xcrun", "--show-sdk-path"]).decode('utf8').replace('\n', '')
             environment_vars.update({"CFLAGS": "-I{}/usr/include".format(sdk_path)})
+
+    # Get the directory the python-build app is in
     pyenv_build_bin = path.join(PYTHONBUILD_DIR, "bin", "python-build")
-    call([pyenv_build_bin] + list(args), env=environment_vars)
+
+    # Pass on environment vars and args to pyenv build script
+    try:
+        check_call([pyenv_build_bin] + list(args), env=environment_vars)
+    except CalledProcessError:
+        raise PythonBuildException((
+            "Error when trying to build python.\nPlease raise an issue at "
+            "https://github.com/hitchtest/hitchpython/issues detailing:\n"
+            "Your OS version, package manager. Please also copy and paste everything "
+            "above this exception."
+        ))
+
 
 def run():
     python_build(*argv[1:])

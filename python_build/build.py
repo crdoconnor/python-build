@@ -1,11 +1,7 @@
-from subprocess import CalledProcessError, check_output, check_call
+from subprocess import check_output, check_call
 from sys import stdout, stderr, exit, argv, platform
 from os import path, chdir, environ
 import copy
-
-
-class PythonBuildException(Exception):
-    pass
 
 
 PYTHONBUILD_DIR = path.dirname(path.realpath(__file__))
@@ -22,19 +18,11 @@ def python_build(*args):
             sdk_path = check_output(["xcrun", "--show-sdk-path"]).decode('utf8').replace('\n', '')
             environment_vars.update({"CFLAGS": "-I{}/usr/include".format(sdk_path)})
 
-    # Get the directory the python-build app is in
+    # Get the full path to the python-build executable
     pyenv_build_bin = path.join(PYTHONBUILD_DIR, "bin", "python-build")
 
     # Pass on environment vars and args to pyenv build script
-    try:
-        check_call([pyenv_build_bin] + list(args), env=environment_vars)
-    except CalledProcessError:
-        raise PythonBuildException((
-            "Error when trying to build python.\nPlease raise an issue at "
-            "https://github.com/hitchtest/hitchpython/issues detailing:\n"
-            "Your OS version, package manager. Please also copy and paste everything "
-            "above this exception."
-        ))
+    check_call([pyenv_build_bin] + list(args), env=environment_vars)
 
 
 def run():

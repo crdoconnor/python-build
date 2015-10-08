@@ -14,7 +14,7 @@ def python_build(*args):
     # Mac OS special config from https://github.com/yyuu/pyenv/wiki/Common-build-problems
     if platform == "darwin":
         osx_version = check_output(["sw_vers", "-productVersion"]).decode('utf8').replace('\n', '')
-        if osx_version in ["10.9", "10.10"]:
+        if "10.9" in osx_version or "10.10" in osx_version:
             sdk_path = check_output(["xcrun", "--show-sdk-path"]).decode('utf8').replace('\n', '')
             environment_vars.update({"CFLAGS": "-I{}/usr/include".format(sdk_path)})
 

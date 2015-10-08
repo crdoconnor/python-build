@@ -12,7 +12,7 @@ def read(*parts):
     return codecs.open(os.path.join(os.path.abspath(os.path.dirname(__file__)), *parts), 'r').read()
 
 setup(name="python-build",
-      version="0.2.4",
+      version="0.2.5",
       description="Tool to download and build python based upon pyenv.",
       long_description=read('README.rst'),
       classifiers=[

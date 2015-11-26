@@ -12,7 +12,9 @@
 #   -g/--debug       Build a debug version
 #
 
-PYTHON_BUILD_VERSION="20150519"
+PYTHON_BUILD_VERSION="20151028"
+
+OLDIFS="$IFS"
 
 set -E
 exec 3<&2 # preserve original stderr at fd 3
@@ -103,6 +105,7 @@ os_information() {
 osx_version() {
   local -a ver
   IFS=. ver=( `sw_vers -productVersion` )
+  IFS="$OLDIFS"
   echo $(( ${ver[0]}*100 + ${ver[1]} ))
 }
 
@@ -518,6 +521,8 @@ fetch_svn() {
 
   if type svn &>/dev/null; then
     svn co -r "$svn_rev" "$svn_url" "${package_name}" >&4 2>&1
+  elif type svnlite &>/dev/null; then
+    svnlite co -r "$svn_rev" "$svn_url" "${package_name}" >&4 2>&1
   else
     echo "error: please install Subversion and try again" >&2
     exit 1
@@ -682,8 +687,7 @@ build_package_standard() {
       export CC=clang
     fi
     ${!PACKAGE_CONFIGURE:-./configure} --prefix="${!PACKAGE_PREFIX_PATH:-$PREFIX_PATH}" \
-                                       --libdir="${!PACKAGE_PREFIX_PATH:-$PREFIX_PATH}/lib" \
-                                       $CONFIGURE_OPTS ${!PACKAGE_CONFIGURE_OPTS} "${!PACKAGE_CONFIGURE_OPTS_ARRAY}"
+      $CONFIGURE_OPTS ${!PACKAGE_CONFIGURE_OPTS} "${!PACKAGE_CONFIGURE_OPTS_ARRAY}" || return 1
   ) >&4 2>&1
 
   { "$MAKE" $MAKE_OPTS ${!PACKAGE_MAKE_OPTS} "${!PACKAGE_MAKE_OPTS_ARRAY}"
@@ -845,6 +849,23 @@ build_package_jython() {
       ( cd "${PREFIX_PATH}/bin" && ln -fs jython python )
     fi
   } >&4 2>&1
+  fix_jython_shebangs
+}
+
+fix_jython_shebangs() {
+  # Workaround for Jython 2.7+ (#458)
+  for file in "${PREFIX_PATH}/bin"/*; do
+    case "$(head -1 "${file}")" in
+    "#!"*"/bin/jython" )
+      sed -i.bak "1 s:.*:#\!\/usr\/bin\/env ${PREFIX_PATH}\/bin\/jython:" "${file}"
+      ;;
+    "#!"*"/bin/python2.7"* )
+      # Jython 2.7+ requires CPython 2.7 to run
+      sed -i.bak "1 s:.*:#\!\/usr\/bin\/env python2.7:" "${file}"
+      ;;
+    esac
+    rm -f "${file}.bak"
+  done
 }
 
 build_package_jython_builder() {
@@ -872,6 +893,8 @@ pypy_architecture() {
     "armel" ) echo "linux-armel" ;;
     "armhf" | "armv6l" | "armv7l" ) echo "linux-armhf" ;;
     "i386" | "i486" | "i586" | "i686" | "i786" ) echo "linux" ;;
+    "ppc64" ) echo "linux-ppc64" ;;
+    "ppc64le" ) echo "linux-ppc64le" ;;
     "x86_64" ) echo "linux64" ;;
     * ) return 1 ;;
     esac
@@ -890,10 +913,18 @@ pypy_architecture() {
 build_package_pypy() {
   build_package_copy
   mkdir -p "${PREFIX_PATH}/bin" "${PREFIX_PATH}/lib"
-  local pypy libpypy
+  local pypy libpypy python
   shopt -s nullglob
   for pypy in "bin/pypy"*; do
-    ( cd "${PREFIX_PATH}/bin" && ln -fs "$(basename "${pypy}")" "$(basename "${pypy}" | sed -e 's/pypy/python/')" )
+    case "${pypy##*/}" in
+    "pypy-stm" )
+      python="bin/python"
+      ;;
+    * )
+      python="$(basename "${pypy}" | sed -e 's/pypy/python/')"
+      ;;
+    esac
+    ( cd "${PREFIX_PATH}/bin" && ln -fs "${pypy##*/}" "${python##*/}" )
   done
   for libpypy in "bin/libpypy-c."*; do
     ( cd "${PREFIX_PATH}/lib" && ln -fs "../bin/$(basename "${libpypy}")" "$(basename "${libpypy}")" )
@@ -1075,6 +1106,7 @@ require_gcc() {
 locate_gcc() {
   local gcc gccs
   IFS=: gccs=($(gccs_in_path))
+  IFS="$OLDIFS"
 
   verify_gcc "$CC" ||
   verify_gcc "$(command -v gcc || true)" || {
@@ -1090,6 +1122,7 @@ gccs_in_path() {
   local gcc path paths
   local gccs=()
   IFS=: paths=($PATH)
+  IFS="$OLDIFS"
 
   shopt -s nullglob
   for path in "${paths[@]}"; do
@@ -1124,12 +1157,13 @@ require_llvm() {
   local llvm_version="$1"
   if [ "$(uname -s)" = "Darwin" ] && [ "$(osx_version)" -ge 1010 ]; then
     if [[ "$PYTHON_CONFIGURE_OPTS" != *--llvm-* ]]; then
-      if [ "$llvm_version" = "3.2" ]; then
+      case "$llvm_version" in
+      3.2 )
         package_option python configure --prebuilt-name="llvm-3.2-x86_64-apple-darwin13.tar.bz2"
-      else
-        local llvm_prefix="$(brew --prefix llvm 2>/dev/null || true)"
-        local llvm_config="${llvm_prefix}/bin/llvm-config"
-        if [ -x "$llvm_config" ]; then
+        ;;
+      3.5 )
+        local llvm_config="$(locate_llvm "$llvm_version")"
+        if [ -n "$llvm_config" ]; then
           package_option python configure --llvm-config="$llvm_config"
         else
           { echo
@@ -1140,14 +1174,29 @@ require_llvm() {
             colorize 1 "TO FIX THE PROBLEM"
             echo ": Install Homebrew's llvm package with this"
             echo -n "command: "
-            colorize 4 "brew install llvm"
+            colorize 4 "brew tap homebrew/versions ; brew install llvm35"
             echo
           } >&3
           return 1
         fi
-      fi
+        ;;
+      esac
     fi
   fi
+}
+
+locate_llvm() {
+  local llvm_version="$1"
+  local package llvm_config
+  shopt -s nullglob
+  for package in `brew list 2>/dev/null | grep "^llvm"`; do
+    llvm_config="$(echo "$(brew --prefix "$package")/bin/llvm-config"*)"
+    if [ -n "$llvm_config" ] && [[ "$("$llvm_config" --version)" = "$llvm_version"* ]]; then
+      echo "$llvm_config"
+      break
+    fi
+  done
+  shopt -u nullglob
 }
 
 require_java() {
@@ -1234,7 +1283,6 @@ use_homebrew_readline() {
 has_broken_mac_openssl() {
   [ "$(uname -s)" = "Darwin" ] &&
   [[ "$(/usr/bin/openssl version 2>/dev/null || true)" = "OpenSSL 0.9.8"?* ]] &&
-  [[ "$RUBY_CONFIGURE_OPTS" != *--with-openssl-dir=* ]] &&
   ! use_homebrew_openssl
 }
 
@@ -1293,11 +1341,16 @@ build_package_verify_openssl() {
 
 # Ensure that directories listed in LDFLAGS exist
 build_package_ldflags_dirs() {
-  local arg
-  for arg in $LDFLAGS; do
-    case "$arg" in
-    -L* ) mkdir -p "${arg#-L}" ;;
+  local arg dir
+  set - $LDFLAGS
+  while [ $# -gt 0 ]; do
+    dir=""
+    case "$1" in
+    -L  ) dir="$2" ;;
+    -L* ) dir="${1#-L}" ;;
     esac
+    [ -z "$dir" ] || mkdir -p "$dir"
+    shift 1
   done
 }
 
@@ -1517,6 +1570,11 @@ build_package_verify_py35() {
   build_package_verify_py34 "$1" "${2:-3.5}"
 }
 
+# Post-install check for Python 3.6.x
+build_package_verify_py36() {
+  build_package_verify_py35 "$1" "${2:-3.6}"
+}
+
 build_package_ez_setup() {
   local ez_setup="${BUILD_PATH}/ez_setup.py"
   rm -f "${ez_setup}"
@@ -1547,7 +1605,7 @@ build_package_get_pip() {
       http get "${GET_PIP_URL}"
     fi
   } 1> "${get_pip}"
-  "${PYTHON_BIN}" "${get_pip}" ${GET_PIP_OPTS} 1>&4 2>&1 || {
+  "${PYTHON_BIN}" -s "${get_pip}" ${GET_PIP_OPTS} 1>&4 2>&1 || {
     echo "error: failed to install pip via get-pip.py" >&2
     return 1
   }
@@ -1560,7 +1618,7 @@ build_package_ensurepip() {
     ensurepip_opts="--altinstall"
   fi
   # FIXME: `--altinstall` with `get-pip.py`
-  "$PYTHON_BIN" -m ensurepip ${ensurepip_opts} 1>/dev/null 2>&1 || build_package_get_pip "$@" || return 1
+  "$PYTHON_BIN" -s -m ensurepip ${ensurepip_opts} 1>/dev/null 2>&1 || build_package_get_pip "$@" || return 1
 }
 
 version() {
@@ -1600,7 +1658,6 @@ unset IPV6
 
 PYTHON_BUILD_INSTALL_PREFIX="$(abs_dirname "$0")/.."
 
-OLDIFS="$IFS"
 IFS=: PYTHON_BUILD_DEFINITIONS=($PYTHON_BUILD_DEFINITIONS ${PYTHON_BUILD_ROOT:-$PYTHON_BUILD_INSTALL_PREFIX}/share/python-build)
 IFS="$OLDIFS"
 
@@ -1745,6 +1802,9 @@ fi
 if [ -n "$DEBUG" ]; then
   package_option python configure --with-pydebug
 fi
+
+# python-build: Specify `--libdir` on configure to fix build on openSUSE (#36)
+package_option python configure --libdir="${PREFIX_PATH}/lib"
 
 # python-build: Set `RPATH` if `--enable-shared` was given (#65, #66, #82)
 if [[ "$CONFIGURE_OPTS" == *"--enable-shared"* ]] || [[ "$PYTHON_CONFIGURE_OPTS" == *"--enable-shared"* ]]; then

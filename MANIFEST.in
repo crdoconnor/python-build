@@ -1,1 +1,2 @@
 recursive-include python_build *
+include VERSION
